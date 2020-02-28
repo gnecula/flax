@@ -205,7 +205,7 @@ class Module(metaclass=_ModuleMeta):
     if not _module_stack:
       raise ValueError('A Module should only be instantiated directly inside'
                        ' another module.')
-    parent = _module_stack[-1]
+    parent = cls._get_construction_frame()
     apply_kwargs = cls._extend_kwargs(kwargs)
     if name is None:
       name = cls._default_name()
@@ -268,9 +268,18 @@ class Module(metaclass=_ModuleMeta):
       @classmethod
       def _is_shared(cls):
         return True
+
+      @classmethod
+      def _get_construction_frame(cls):
+        return parent
+
     SharedModule.__name__ = class_.__name__
 
     return SharedModule
+
+  @classmethod
+  def _get_construction_frame(cls):
+    return _module_stack[-1]
 
   @classmethod
   def partial(class_, *, name=None, **kwargs):
