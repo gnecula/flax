@@ -15,7 +15,7 @@
 """LSTM classifier model for SST-2."""
 
 import functools
-from typing import Any, Callable, Dict, Text
+from typing import Any, Callable, Text, Tuple
 
 import flax
 from flax import nn
@@ -30,9 +30,9 @@ import numpy as np
 
 @functools.partial(jax.jit, static_argnums=(0, 1, 2, 3))
 def create_model(seed: int, batch_size: int, max_len: int,
-                 model_kwargs: Dict[Text, Any]):
+                 model_kwargs: Tuple[Tuple[Text, Any], ...]):
   """Instantiates a new model."""
-  module = TextClassifier.partial(train=False, **model_kwargs)
+  module = TextClassifier.partial(train=False, **dict(model_kwargs))
   _, initial_params = module.init_by_shape(
       jax.random.PRNGKey(seed),
       [((batch_size, max_len), jnp.int32),

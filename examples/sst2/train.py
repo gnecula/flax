@@ -38,6 +38,9 @@ from flax import nn
 
 import jax
 import jax.numpy as jnp
+
+from jax.experimental.jax2tf.examples import saved_model_lib
+
 import numpy as np
 
 import tensorflow as tf
@@ -331,7 +334,7 @@ def train_and_evaluate(
       seed,
       batch_size,
       max_seq_len,
-      dict(
+      tuple(dict(
           vocab_size=data_source.vocab_size,
           embedding_size=embedding_size,
           hidden_size=hidden_size,
@@ -339,7 +342,7 @@ def train_and_evaluate(
           unk_idx=data_source.unk_idx,
           dropout=dropout,
           emb_dropout=emb_dropout,
-          word_dropout_rate=word_dropout_rate))
+          word_dropout_rate=word_dropout_rate).items()))
 
   # Train the model.
   _, model = train(
@@ -358,6 +361,7 @@ def train_and_evaluate(
       data_source.valid_dataset, batch_size=batch_size)
   metrics = evaluate(model, valid_batches)
   logging.info('Best validation accuracy: %.2f', metrics['acc'])
+  return model
 
 
 def main(argv):
@@ -373,7 +377,7 @@ def main(argv):
   if not gfile.exists(FLAGS.model_dir):
     gfile.makedirs(FLAGS.model_dir)
 
-  train_and_evaluate(
+  model = train_and_evaluate(
     seed=FLAGS.seed, model_dir=FLAGS.model_dir, num_epochs=FLAGS.num_epochs,
     batch_size=FLAGS.batch_size, embedding_size=FLAGS.embedding_size,
     hidden_size=FLAGS.hidden_size, min_freq=FLAGS.min_freq,
@@ -381,6 +385,42 @@ def main(argv):
     emb_dropout=FLAGS.emb_dropout, word_dropout_rate=FLAGS.word_dropout_rate,
     learning_rate=FLAGS.learning_rate,
     checkpoints_to_keep=FLAGS.checkpoints_to_keep, l2_reg=FLAGS.l2_reg)
+
+  # Export a SavedModel with jax2tf
+  # ================================
+  # In Flax, you evaluate a model with two arguments, as follows
+  # `model(input1, input2)`. This invocation uses the implicit model
+  # parameters (`model.params`). We need to pass the parameters explicitly
+  # so that we can the saving to SaveModel can replace them with tf.Variable.
+  #
+  # The model.__call__ is defined by Flas as follows:
+  #
+  # def __call__(self, *args, **kwargs):
+  #   return self.module.call(self.params, *args, **kwargs)
+  #
+  # This suggests So, we An alterantive way to
+  # involve the model is `model.module.call(model.param, input1, input2)
+  def model_for_save_model(params, all_inputs):
+    return model.module.call(params, *all_inputs)
+
+  fake_inputs=np.ones((FLAGS.batch_size, 32), dtype=np.int32)
+  fake_lengths=np.ones((FLAGS.batch_size,), dtype=np.int32)
+  res1 = model(fake_inputs, fake_lengths)
+  res2 = model.module.call(model.params, fake_inputs, fake_lengths)
+  np.testing.assert_allclose(res1, res2)
+  res3 = model_for_save_model(model.params, (fake_inputs, fake_lengths))
+  np.testing.assert_allclose(res1, res3)
+
+  def input_signature_from_data(all_inputs):
+    return tf.nest.map_structure(lambda d: tf.TensorSpec(d.shape, d.dtype),
+                                 all_inputs)
+  savedmodel_dir = "/tmp/jax2tf/sst2/1"
+  saved_model_lib.save_model(model_for_save_model, model.params,
+                             savedmodel_dir,
+                             input_signatures=[input_signature_from_data((fake_inputs, fake_lengths))])
+  restored = tf.saved_model.load(savedmodel_dir)
+  res4 = restored((fake_inputs, fake_lengths))
+  np.testing.assert_allclose(res1, res4)
 
 
 if __name__ == '__main__':
